@@ -6,6 +6,13 @@ on:
       - main
     tags:
       - "v*"
+    paths:
+      - "app/**"
+      - "sql/**"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "requirements.txt"
   workflow_dispatch:
 
 permissions:
