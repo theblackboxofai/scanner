@@ -20,52 +20,52 @@ class OllamaSnapshot:
 class OllamaClient:
     def __init__(self, user_agent: str, timeout_seconds: float) -> None:
         self.timeout_seconds = timeout_seconds
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Accept": "application/json",
-                "User-Agent": user_agent,
-            }
-        )
+        self.headers = {
+            "Accept": "application/json",
+            "User-Agent": user_agent,
+        }
 
     def fetch_snapshot(self, server_url: str) -> OllamaSnapshot | None:
-        version = self._fetch_version(server_url)
+        with requests.Session() as session:
+            session.headers.update(self.headers)
 
-        try:
-            response = self.session.get(
-                f"{server_url}/api/tags",
-                timeout=self.timeout_seconds,
+            try:
+                response = session.get(
+                    f"{server_url}/api/tags",
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                LOGGER.warning("Failed to fetch models from %s: %s", server_url, exc)
+                return None
+
+            try:
+                payload = response.json()
+            except ValueError:
+                LOGGER.warning("Non-JSON response from %s/api/tags", server_url)
+                return None
+
+            if not isinstance(payload, dict):
+                LOGGER.warning("Unexpected JSON shape from %s/api/tags", server_url)
+                return None
+
+            models = payload.get("models")
+            if not isinstance(models, list) or not models:
+                LOGGER.info("No models returned by %s", server_url)
+                return None
+
+            version = self._fetch_version(server_url, session)
+
+            return OllamaSnapshot(
+                server_url=server_url,
+                version=version,
+                response_json=payload,
+                models=models,
             )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            LOGGER.warning("Failed to fetch models from %s: %s", server_url, exc)
-            return None
 
+    def _fetch_version(self, server_url: str, session: requests.Session) -> str | None:
         try:
-            payload = response.json()
-        except ValueError:
-            LOGGER.warning("Non-JSON response from %s/api/tags", server_url)
-            return None
-
-        if not isinstance(payload, dict):
-            LOGGER.warning("Unexpected JSON shape from %s/api/tags", server_url)
-            return None
-
-        models = payload.get("models")
-        if not isinstance(models, list) or not models:
-            LOGGER.info("No models returned by %s", server_url)
-            return None
-
-        return OllamaSnapshot(
-            server_url=server_url,
-            version=version,
-            response_json=payload,
-            models=models,
-        )
-
-    def _fetch_version(self, server_url: str) -> str | None:
-        try:
-            response = self.session.get(
+            response = session.get(
                 f"{server_url}/api/version",
                 timeout=self.timeout_seconds,
             )

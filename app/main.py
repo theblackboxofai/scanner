@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import time
 from pathlib import Path
@@ -42,26 +43,42 @@ def execute_scan(config, database: Database, ollama_client: OllamaClient) -> Non
         discovered_hosts = len(findings)
         LOGGER.info("Masscan discovered %s candidate hosts", discovered_hosts)
 
-        for finding in findings:
-            snapshot = ollama_client.fetch_snapshot(finding.server_url)
-            if snapshot is None:
-                continue
+        worker_count = max(1, min(config.ollama_fetch_workers, discovered_hosts or 1))
+        LOGGER.info("Fetching Ollama models with %s concurrent workers", worker_count)
 
-            database.save_server_scan(
-                scan_run_id=scan_run_id,
-                server_url=finding.server_url,
-                host=finding.host,
-                port=finding.port,
-                version=snapshot.version,
-                response_json=snapshot.response_json,
-                models=snapshot.models,
-            )
-            saved_hosts += 1
-            LOGGER.info(
-                "Saved %s models from %s",
-                len(snapshot.models),
-                finding.server_url,
-            )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            future_to_finding = {
+                executor.submit(ollama_client.fetch_snapshot, finding.server_url): finding
+                for finding in findings
+            }
+
+            for future in concurrent.futures.as_completed(future_to_finding):
+                finding = future_to_finding[future]
+
+                try:
+                    snapshot = future.result()
+                except Exception as exc:
+                    LOGGER.warning("Snapshot fetch failed for %s: %s", finding.server_url, exc)
+                    continue
+
+                if snapshot is None:
+                    continue
+
+                database.save_server_scan(
+                    scan_run_id=scan_run_id,
+                    server_url=finding.server_url,
+                    host=finding.host,
+                    port=finding.port,
+                    version=snapshot.version,
+                    response_json=snapshot.response_json,
+                    models=snapshot.models,
+                )
+                saved_hosts += 1
+                LOGGER.info(
+                    "Saved %s models from %s",
+                    len(snapshot.models),
+                    finding.server_url,
+                )
     except Exception as exc:
         note = str(exc)
         LOGGER.exception("Scan run failed")

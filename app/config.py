@@ -34,6 +34,7 @@ class Config:
     masscan_port: int
     masscan_rate: int
     masscan_wait_seconds: int
+    ollama_fetch_workers: int
     request_timeout_seconds: float
     scan_interval_seconds: int
     user_agent: str
@@ -52,6 +53,7 @@ def load_config() -> Config:
         masscan_port=_get_int("MASSCAN_PORT", 11434),
         masscan_rate=_get_int("MASSCAN_RATE", 1000),
         masscan_wait_seconds=_get_int("MASSCAN_WAIT_SECONDS", 10),
+        ollama_fetch_workers=_get_int("OLLAMA_FETCH_WORKERS", 32),
         request_timeout_seconds=_get_float("REQUEST_TIMEOUT_SECONDS", 15.0),
         scan_interval_seconds=_get_int("SCAN_INTERVAL_SECONDS", 86400),
         user_agent=os.getenv("HTTP_USER_AGENT", "Blackbox/1.0"),
