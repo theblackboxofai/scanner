@@ -1,0 +1,21 @@
+services:
+  scanner:
+    build:
+      context: .
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to your external Postgres instance}
+      DB_CONNECT_RETRY_SECONDS: 30
+      RANGES_FILE: /app/ranges.txt
+      MASSCAN_PORT: 11434
+      MASSCAN_RATE: 1000
+      MASSCAN_WAIT_SECONDS: 10
+      REQUEST_TIMEOUT_SECONDS: 15
+      SCAN_INTERVAL_SECONDS: 86400
+      HTTP_USER_AGENT: Blackbox/1.0
+      LOG_LEVEL: INFO
+    volumes:
+      - ./ranges.txt:/app/ranges.txt:ro
