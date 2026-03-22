@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import logging
 import subprocess
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,44 @@ def parse_masscan_output(output: str, expected_port: int) -> list[MasscanFinding
     return sorted(findings.values(), key=lambda item: (item.host, item.port))
 
 
+def _consume_stream(
+    stream: TextIO,
+    sink: list[str],
+    line_handler: Callable[[str], None],
+) -> None:
+    for raw_line in stream:
+        sink.append(raw_line)
+        line_handler(raw_line.rstrip())
+
+    stream.close()
+
+
+def _log_stdout_line(line: str, expected_port: int) -> None:
+    if not line:
+        return
+
+    parts = line.split()
+    if len(parts) >= 4 and parts[0] == "open" and parts[1] == "tcp":
+        try:
+            discovered_port = int(parts[2])
+        except ValueError:
+            LOGGER.debug("masscan stdout: %s", line)
+            return
+
+        if discovered_port == expected_port:
+            LOGGER.info("Masscan found %s:%s", parts[3], discovered_port)
+            return
+
+    LOGGER.debug("masscan stdout: %s", line)
+
+
+def _log_stderr_line(line: str) -> None:
+    if not line:
+        return
+
+    LOGGER.info("masscan: %s", line)
+
+
 def run_masscan(
     ranges_file: Path,
     port: int,
@@ -69,15 +113,49 @@ def run_masscan(
         "-",
     ]
 
-    completed = subprocess.run(
+    LOGGER.info(
+        "Starting masscan for %s on port %s with rate %s",
+        ranges_file,
+        port,
+        rate,
+    )
+
+    process = subprocess.Popen(
         command,
-        capture_output=True,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
 
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip() or "masscan exited with a non-zero status"
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError("masscan did not expose stdout/stderr streams")
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    stdout_thread = threading.Thread(
+        target=_consume_stream,
+        args=(process.stdout, stdout_chunks, lambda line: _log_stdout_line(line, port)),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_consume_stream,
+        args=(process.stderr, stderr_chunks, _log_stderr_line),
+        daemon=True,
+    )
+
+    stdout_thread.start()
+    stderr_thread.start()
+
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks).strip()
+
+    if returncode != 0:
+        stderr = stderr or "masscan exited with a non-zero status"
         raise RuntimeError(stderr)
 
-    return parse_masscan_output(completed.stdout, expected_port=port)
+    return parse_masscan_output(stdout, expected_port=port)
